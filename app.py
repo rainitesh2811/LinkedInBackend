@@ -33,13 +33,18 @@ def health():
 def run_scraper():
     print("\n[ BACKEND ACTIVE ] Request received...")
 
-    data = request.get_json(force=True) or {}
+    try:
+        data = request.get_json(force=True) or {}
+    except Exception as e:
+        print("[ERROR] Failed to parse JSON:", e)
+        return jsonify({"ok": False, "error": "Invalid JSON payload"}), 400
+
     print("[DEBUG] Payload:", data)
 
-    query = data.get("query", "")
-    location = data.get("location", "")
-    pages = int(data.get("pages", 5))
-    output = data.get("output", "results")
+    query = data.get("query", "") or ""
+    location = data.get("location", "") or ""
+    pages = int(data.get("pages", 5) or 5)
+    output = data.get("output", "results") or "results"
     fetch = bool(data.get("fetch_contact", False))
     headless = bool(data.get("headless", False))
     excel = bool(data.get("excel", False))
@@ -49,22 +54,30 @@ def run_scraper():
         f"output={output!r}, fetch_contact={fetch}, headless={headless}, excel={excel}"
     )
 
-    driver = create_driver(headless=headless)
-    print("[DEBUG] Chrome driver created.")
+    try:
+        print("[DEBUG] Creating Chrome driver...")
+        driver = create_driver(headless=headless)
+        print("[DEBUG] Chrome driver created.")
+    except Exception as e:
+        print("[EXCEPTION] Failed to create driver:", repr(e))
+        return jsonify({
+            "ok": False,
+            "error": f"Failed to create WebDriver: {e}"
+        }), 500
 
     try:
         print("[DEBUG] Waiting for LinkedIn login...")
         ok = wait_for_manual_login(driver, timeout_s=300)
         if not ok:
-            print("[ERROR] Login timeout")
+            print("[ERROR] Login failed or timeout.")
             return jsonify({"ok": False, "error": "Login timeout"}), 400
 
-        print("[DEBUG] Login detected. Searching...")
+        print("[DEBUG] Login confirmed. Opening search URL...")
         driver.get(build_search_url(query))
         time.sleep(2)
 
         if location:
-            print(f"[DEBUG] Applying location facet: {location}")
+            print(f"[DEBUG] Trying to apply location facet for: {location!r}")
             try_apply_location_facet(driver, location)
 
         collected = []
@@ -73,11 +86,13 @@ def run_scraper():
         for p in range(1, pages + 1):
             print(f"[DEBUG] Scraping page {p}...")
             rows = scrape_results(driver)
-            print(f"[DEBUG] {len(rows)} rows found.")
+            print(f"[DEBUG] Page {p} returned {len(rows)} rows.")
 
             for r in rows:
-                key = (r.get("profile_url") or r.get("name", "")).strip()
-                if key and key not in seen:
+                key = (r.get("profile_url") or r.get("name") or "").strip()
+                if not key:
+                    continue
+                if key not in seen:
                     seen.add(key)
                     r.setdefault("email", "")
                     r.setdefault("phone", "")
@@ -86,47 +101,51 @@ def run_scraper():
                     collected.append(r)
 
             if not next_page(driver):
+                print("[DEBUG] No next page, stopping pagination.")
                 break
 
-        print(f"[DEBUG] Total collected: {len(collected)}")
+        print(f"[DEBUG] Total collected before location filter: {len(collected)}")
         filtered = filter_by_location(collected, location)
-        print(f"[DEBUG] After filter: {len(filtered)}")
+        print(f"[DEBUG] After location filter: {len(filtered)}")
 
         if fetch:
-            print("[DEBUG] Fetching contact info...")
+            print("[DEBUG] Fetching contact info for filtered profiles...")
             for idx, r in enumerate(filtered, 1):
                 url = r.get("profile_url", "")
-                print(f"[DEBUG] Visiting {idx}/{len(filtered)}: {url}")
+                print(f"[DEBUG] ({idx}/{len(filtered)}) Visiting profile: {url}")
                 contact = fetch_contact(driver, url)
                 r.update(contact)
-                time.sleep(1)
+                time.sleep(1.0 + (idx % 3) * 0.5)
 
-        print("[DEBUG] Saving output files...")
+        print("[DEBUG] Saving outputs...")
         files = save_outputs(filtered, output, excel=excel)
+        print("[DEBUG] Files saved:", files)
 
-        return jsonify({
-            "ok": True,
-            "total": len(collected),
-            "filtered": len(filtered),
-            "files": files
-        })
+        return jsonify(
+            {
+                "ok": True,
+                "total": len(collected),
+                "filtered": len(filtered),
+                "files": files,
+            }
+        )
 
     except Exception as e:
-        print("[EXCEPTION]", e)
+        print("[EXCEPTION] Route error:", repr(e))
         return jsonify({"ok": False, "error": str(e)}), 500
 
     finally:
         print("[DEBUG] Closing browser...")
         try:
             driver.quit()
-        except:
+        except Exception:
             pass
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print("\n===========================================")
-    print("  BACKEND ACTIVE: LinkedIn Scraper API")
+    print("\n============================================")
+    print("  [ BACKEND ACTIVE ] LinkedIn Scraper API")
     print(f"  Listening on 0.0.0.0:{port}")
-    print("===========================================\n")
+    print("============================================\n")
     app.run(host="0.0.0.0", port=port, debug=False)
