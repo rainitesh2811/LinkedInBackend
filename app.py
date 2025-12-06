@@ -12,10 +12,14 @@ from scrapper.scraper_core import (
     save_outputs,
 )
 import time
+import os
 
 app = Flask(__name__)
 CORS(app)
 
+@app.get("/")
+def health():
+    return {"status": "ok", "message": "LinkedIn Scraper API running"}
 
 @app.post("/run-scraper")
 def run_scraper():
@@ -29,7 +33,6 @@ def run_scraper():
     pages = int(data.get("pages", 5) or 5)
     output = data.get("output", "results") or "results"
     fetch = bool(data.get("fetch_contact", False))
-    # For now, to be safe during manual login, force headless = False
     headless = False
     excel = bool(data.get("excel", False))
 
@@ -120,8 +123,9 @@ def run_scraper():
 
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
     print("\n============================================")
     print("  [ BACKEND ACTIVE ] LinkedIn Scraper API")
-    print("  Listening on http://127.0.0.1:5000/")
+    print(f"  Listening on 0.0.0.0:{port}")
     print("============================================\n")
-    app.run(port=5000, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
